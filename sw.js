@@ -1,5 +1,5 @@
 // Samband 452 – offline cache. Ändra CACHE vid varje ny version.
-const CACHE = 's452-v0.4.1';
+const CACHE = 's452-v0.6';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

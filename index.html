@@ -116,7 +116,7 @@ html.dark .msg .mt{color:var(--accent-bright);}
 .msg .sub b{font-weight:700;}
 .listitem{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);}
 .listitem + .listitem{margin-top:8px;}
-.listitem > button.lhead{display:flex;width:100%;text-align:left;align-items:center;gap:10px;background:none;border:0;padding:12px 14px;min-height:56px;}
+.listitem button.lhead{display:flex;width:100%;text-align:left;align-items:center;gap:10px;background:none;border:0;padding:12px 14px;min-height:56px;}
 .listitem .lt{font-family:var(--font-head);font-size:20px;color:var(--accent);min-width:70px;}
 html.dark .listitem .lt{color:var(--accent-bright);}
 .listitem .ls{font-size:14px;color:var(--ink-soft);flex:1;}
@@ -157,6 +157,24 @@ html.dark #sheet{border-top-color:var(--accent-bright);}
 .switch.on{background:var(--accent);border-color:var(--accent);}
 .switch.on::after{left:25px;background:#fff;}
 #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--navy);color:#fff;padding:12px 18px;border-radius:var(--radius);border:1px solid var(--accent-bright);z-index:80;max-width:90vw;font-size:15px;display:none;}
+/* v0.5 */
+.toprow{display:flex;gap:8px;align-items:stretch;margin-bottom:12px;}
+.keybtn{flex:1 1 auto;justify-content:flex-start;text-align:left;gap:12px;min-height:56px;font-weight:400;}
+.keybtn b{font-family:var(--font-head);font-weight:400;font-size:18px;letter-spacing:.02em;}
+.keybtn .ks{font-size:13px;color:var(--ink-soft);}
+.keybtn.warn{border-color:var(--warn);background:var(--warn-soft);}
+.dot.off{background:var(--warn);}
+.btn.panic{flex:0 0 auto;background:#A3362B;color:#fff;border-color:#A3362B;font-family:var(--font-head);font-weight:400;font-size:19px;letter-spacing:.04em;min-height:56px;}
+.lrow{display:flex;align-items:center;gap:6px;padding-right:10px;}
+.lrow .lhead{flex:1;min-width:0;}
+.listitem .ls .tag{display:inline-block;margin:0 4px 3px 0;}
+.tag.in{color:var(--ok);border-color:var(--ok);}
+.tag.warn{color:var(--danger);border-color:var(--danger);}
+.tag.kept{color:var(--accent);border-color:var(--accent);}
+html.dark .tag.kept{color:var(--accent-bright);border-color:var(--accent-bright);}
+.lbtns{display:flex;flex-direction:column;gap:6px;flex-shrink:0;}
+.lbtns .btn{min-width:96px;}
+.btn.kept{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);}
 </style>
 </head>
 <body>
@@ -167,8 +185,10 @@ html.dark #sheet{border-top-color:var(--accent-bright);}
 
 <script>
 'use strict';
-const VERSION = '0.4';
+const VERSION = '0.6';
 const CHANGELOG = [
+  {v:'0.6', items:['Spara-knapp på meddelanden i arkivet: sparade meddelanden gallras inte automatiskt.','Vid midnatt frågar appen om du vill gallra sparade meddelanden i arkivet.']},
+  {v:'0.5', items:['Dygnskoden heter nu Nyckel och ligger kvar tills en ny matas in. Appen varnar när nyckeln är äldre än 24 timmar.','Export sker alltid via Kopiera – ingen delningsmeny.','Ny knapp: Min position – visar din position i MGRS och skickas som övriga mallar.','Nytt Arkiv med alla skickade och mottagna meddelanden, senaste överst. Raderas automatiskt efter 24 timmar. Spara-knappen är borttagen.','RADERA ALLT på startsidan raderar all data i appen.']},
   {v:'0.4', items:['Kvittera mottagna meddelanden med ett tryck (klartext).','Appen raderas efter 10 felaktiga PIN-försök.','Dela ersätter Kopiera.','Utkast raderas automatiskt efter 12 timmar.','Fungerar helt utan uppkoppling när den installerats från webbadressen.']},
   {v:'0.3', items:['Nytt val: Skicka i klartext, för lägen där tiden är kritisk. Kräver ingen dygnskod och syns tydligt som okrypterat.']},
   {v:'0.2', items:['Ny mall: ORIENTERING med ett fritextfält.']},
@@ -231,6 +251,10 @@ const TEMPLATES = [
   ]},
   {id:'ORIENTERING', name:'ORIENTERING', sub:'Fritext', freeText:true, noOvrigt:true, fields:[
     {k:'txt', l:'Orientering', rows:6, h:'Skriv fritt'}
+  ]},
+  /* Min position: egen vy (inte i mallmenyn), skickas och visas som en mall */
+  {id:'POS', name:'MIN POSITION', special:true, fields:[
+    {k:'pos', l:'Position'}
   ]}
 ];
 const OVRIGT_HINT = 'Förtydligande, eller tidsnummer om rapporten avser en tidigare tidpunkt';
@@ -301,7 +325,7 @@ async function decryptMessage(text, codes){
 
 /* ================= Vault ================= */
 let pinKey=null, vault=null, received=[], hiddenAt=0, saveTimer=null;
-function emptyVault(){ return {user:{namn:'',komp:'',plut:'',grp:''}, codes:[], drafts:{}, saved:[], lastRemind:'', seenVersion:VERSION}; }
+function emptyVault(){ return {user:{namn:'',komp:'',plut:'',grp:''}, codes:[], drafts:{}, saved:[], archive:[], lastRemind:'', seenVersion:VERSION}; }
 async function createVault(pin){
   const salt=rnd(16); store.set('s452.salt',b64(salt));
   pinKey=await deriveKey(pin,salt,PIN_ITER);
@@ -322,22 +346,37 @@ async function saveVault(){
 function saveSoon(){ clearTimeout(saveTimer); saveTimer=setTimeout(saveVault,400); }
 function hasVault(){ return !!(store.get('s452.vault')&&store.get('s452.salt')); }
 
-/* day codes: today's kept; yesterday's kept until 06:00 */
 function pruneDrafts(){
   if(!vault) return; const now=Date.now(); let ch=false;
   Object.keys(vault.drafts).forEach(id=>{ const d=vault.drafts[id]; if(d&&d._t&&now-d._t>DRAFT_MAX_MS){ delete vault.drafts[id]; ch=true; } });
   if(ch) saveSoon();
 }
+/* Nyckel: ligger kvar tills en ny matas in. Föregående nyckel behålls i
+   24 h efter bytet (endast för att läsa). Varning när nyckeln är > 24 h. */
+const KEY_WARN_MS = 24*60*60*1000, KEY_GRACE_MS = 24*60*60*1000;
 function pruneCodes(){
   if(!vault) return;
-  const now=new Date(), today=dayKey(now);
-  const y=new Date(now); y.setDate(y.getDate()-1); const yest=dayKey(y);
-  const before=vault.codes.length;
-  vault.codes=vault.codes.filter(c=>c.d===today || (c.d===yest && now.getHours()<6));
+  const now=Date.now(), before=vault.codes.length;
+  vault.codes=vault.codes.filter((c,i,a)=> i===a.length-1 || (a[i+1].t && now-a[i+1].t<KEY_GRACE_MS));
   if(vault.codes.length!==before) saveSoon();
 }
-function todaysCode(){ pruneCodes(); const t=dayKey(); const list=vault.codes.filter(c=>c.d===t); return list.length?list[list.length-1]:null; }
+function currentKey(){ pruneCodes(); return vault.codes.length?vault.codes[vault.codes.length-1]:null; }
+function keyIsOld(k){ return !!k && (!k.t || Date.now()-k.t>KEY_WARN_MS); }
+function keyAge(k){ const h=Math.floor((Date.now()-(k.t||0))/3600000); return h<1?'mindre än 1 h':h+' h'; }
 function codesNewestFirst(){ pruneCodes(); return vault.codes.slice().reverse(); }
+
+/* Arkiv: allt som skickas (kopieras) och tas emot, raderas efter 24 h */
+const ARCHIVE_MAX_MS = 24*60*60*1000;
+function newId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function pruneArchive(){
+  if(!vault||!vault.archive) return false;
+  const now=Date.now(), n=vault.archive.length;
+  vault.archive=vault.archive.filter(a=>a.kept||now-a.at<ARCHIVE_MAX_MS);
+  if(vault.archive.length!==n){ saveSoon(); return true; }
+  return false;
+}
+function archiveAdd(e){ e.id=newId(); e.at=Date.now(); vault.archive.push(e); saveSoon(); return e; }
+function archiveDel(id){ vault.archive=vault.archive.filter(a=>a.id!==id); saveVault(); }
 
 /* ================= Sagesman ================= */
 function userString(){ const u=vault.user; return [u.namn,u.komp,u.plut,u.grp].map(s=>(s||'').trim()).filter(Boolean).join(' / '); }
@@ -470,12 +509,15 @@ function render(){
   else if(view.name==='settings') renderSettings();
   else if(view.name==='user') renderUser();
   else if(view.name==='code') renderCode();
+  else if(view.name==='pos') renderPosition();
+  else if(view.name==='archive') renderArchive();
 }
 app.addEventListener('click',e=>{
   const b=e.target.closest('[data-act]'); if(!b) return;
   const a=b.dataset.act;
   if(a==='home') go('home'); else if(a==='lock') lock(); else if(a==='inbox') go('inbox'); else if(a==='settings') go('settings');
   else if(a==='code') go('code'); else if(a==='user') go('user'); else if(a==='tpl') go('tpl',b.dataset.id);
+  else if(a==='pos') go('pos'); else if(a==='archive') go('archive');
 });
 
 /* ================= Lock / setup ================= */
@@ -494,7 +536,7 @@ function renderLock(msg){
     (!storageOK?'<p style="font-size:13px;color:#F3B3A9">Lagring är inte tillgänglig i den här webbläsaren. Inget sparas när sidan stängs.</p>':'')+
     '</div>';
   app.querySelectorAll('.keypad [data-k]').forEach(b=>b.onclick=()=>pinKey_(b.dataset.k));
-  const fg=$('#forgot'); if(fg) fg.onclick=()=>confirmSheet('Nollställ appen?','Allt raderas: dygnskoder, utkast, sparade meddelanden, användarinfo och PIN-kod.','Nollställ',()=>{ resetApp(); });
+  const fg=$('#forgot'); if(fg) fg.onclick=()=>confirmSheet('Nollställ appen?','Allt raderas: nyckel, utkast, arkiv, användarinfo och PIN-kod.','Nollställ',()=>{ resetApp(); });
   tickLockout();
 }
 function tickLockout(){
@@ -535,32 +577,52 @@ async function pinKey_(k){
 }
 function renderLockKeep(){ const err=$('#lerr')?$('#lerr').textContent:''; renderLock(pinBuf.length?'':err); }
 function afterUnlock(isNew){
-  pruneCodes(); pruneDrafts();
+  migrateVault(); pruneCodes(); pruneDrafts(); pruneArchive();
   if(isNew){ go('user'); return; }
   go('home');
   if(vault.seenVersion!==VERSION){
-    const items=CHANGELOG.filter(c=>c.v===VERSION).flatMap(c=>c.items);
+    let idx=CHANGELOG.findIndex(c=>c.v===vault.seenVersion); if(idx<1) idx=1;
+    const items=CHANGELOG.slice(0,idx).flatMap(c=>c.items);
     vault.seenVersion=VERSION; saveSoon();
-    openSheet('<h3>Nytt i version '+esc(VERSION)+'</h3><ul>'+items.map(i=>'<li>'+esc(i)+'</li>').join('')+'</ul><button class="btn primary block" id="ok">OK</button>',s=>$('#ok',s).onclick=()=>{ closeSheet(); remindSaved(); });
-  } else remindSaved();
+    openSheet('<h3>Nytt i version '+esc(VERSION)+'</h3><ul>'+items.map(i=>'<li>'+esc(i)+'</li>').join('')+'</ul><button class="btn primary block" id="ok">OK</button>',s=>$('#ok',s).onclick=()=>{ closeSheet(); checkGallring(); });
+  } else checkGallring();
 }
-function remindSaved(){
-  const t=dayKey();
-  if(vault.saved.length && vault.lastRemind!==t){
-    vault.lastRemind=t; saveSoon();
-    const n=vault.saved.length;
-    openSheet('<h3>Sparade meddelanden</h3><p>Du har '+n+' sparade meddelande'+(n===1?'':'n')+'. Radera?</p><div class="btnrow"><button class="btn danger" id="del">Radera alla</button><button class="btn" id="keep">Behåll</button></div>',s=>{
-      $('#del',s).onclick=()=>{ vault.saved=[]; saveVault(); closeSheet(); render(); toast('Sparade meddelanden raderade'); };
-      $('#keep',s).onclick=closeSheet;
-    });
-  }
+/* äldre versioner: sparade meddelanden flyttas till arkivet; nycklar utan tidsstämpel får nuvarande tid */
+function migrateVault(){
+  let ch=false;
+  if(!Array.isArray(vault.archive)){ vault.archive=[]; ch=true; }
+  if(vault.saved&&vault.saved.length){ vault.saved.forEach(s=>vault.archive.push({id:newId(),at:s.at||Date.now(),dir:'in',mode:'krypterat',p:s.p})); vault.saved=[]; ch=true; }
+  vault.codes.forEach(c=>{ if(!c.t){ c.t=Date.now(); ch=true; } });
+  if(ch) saveSoon();
 }
 function lock(){
   clearTimeout(saveTimer);
   const p = vault ? saveVault() : Promise.resolve();
   p.finally(()=>{ pinKey=null; vault=null; received=[]; pinMode='unlock'; pinBuf=''; view={name:'home'}; render(); });
 }
-function resetApp(msg){ ['s452.vault','s452.salt','s452.fail'].forEach(k=>store.del(k)); pinKey=null; vault=null; received=[]; pinMode='setup1'; pinBuf=''; closeSheet(); renderLock(msg||''); }
+function resetApp(msg){ ['s452.vault','s452.salt','s452.fail'].forEach(k=>store.del(k)); pinKey=null; vault=null; received=[]; pinMode='setup1'; pinBuf=''; view={name:'home'}; closeSheet(); renderLock(msg||''); }
+/* arkivet rensas löpande medan appen är öppen */
+/* Gallring av sparade meddelanden: första gången appen är öppen efter
+   midnatt (eller låses upp ett nytt dygn) frågar den om sparade ska gallras */
+function checkGallring(){
+  if(!vault || !$('#sheetWrap').classList.contains('hidden')) return;
+  const today=dayKey();
+  if(!vault.gallraDay){ vault.gallraDay=today; saveSoon(); return; }
+  if(vault.gallraDay===today) return;
+  vault.gallraDay=today; saveSoon();
+  const n=vault.archive.filter(a=>a.kept).length;
+  if(!n) return;
+  openSheet('<h3>Gallra arkivet?</h3><p>Vill du gallra sparade meddelanden i arkivet? Du har '+(n===1?'1 sparat meddelande':n+' sparade meddelanden')+'.</p>'+
+    '<div class="btnrow"><button class="btn primary" id="gja" style="min-height:56px">Ja</button><button class="btn" id="gnej" style="min-height:56px">Nej</button></div>',sh=>{
+    $('#gja',sh).onclick=()=>go('archive');
+    $('#gnej',sh).onclick=closeSheet;
+  });
+}
+setInterval(()=>{
+  if(!vault) return;
+  if(pruneArchive() && (view.name==='archive'||view.name==='home') && $('#sheetWrap').classList.contains('hidden')) render();
+  checkGallring();
+},30*1000);
 
 /* auto-lock + app switcher shield */
 document.addEventListener('visibilitychange',()=>{
@@ -571,18 +633,40 @@ window.addEventListener('pagehide',()=>{ if(vault) saveVault(); });
 
 /* ================= Home ================= */
 function renderHome(){
-  pruneDrafts();
-  const code=todaysCode();
+  pruneDrafts(); pruneArchive();
+  const k=currentKey(), old=keyIsOld(k), bad=!k||old;
   const nDraft=id=>{ const d=vault.drafts[id]; return d && Object.keys(d).some(k=>k!=='sag'&&k!=='_t'&&String(d[k]||'').trim()); };
+  const nArch=vault.archive.length;
   app.innerHTML=headerBig()+'<main>'+
-    (code ? '<div class="banner ok"><span class="dot"></span><div class="txt">Dygnskod inmatad för '+esc(prettyDay(code.d))+'</div><button class="btn small" data-act="code">Ändra</button></div>'
-          : '<div class="banner"><div class="txt"><b>Ingen dygnskod för idag.</b> Behövs för att skicka och läsa meddelanden.</div><button class="btn small primary" data-act="code">Ange</button></div>')+
+    '<div class="toprow">'+
+      '<button class="btn keybtn'+(bad?' warn':'')+'" data-act="code"><span class="dot'+(bad?' off':'')+'"></span><span><b>Nyckel</b><br><span class="ks">'+(k?(old?'Äldre än 24 h – byt':'Inmatad '+esc(dtg(new Date(k.t)))):'Saknas – mata in')+'</span></span></button>'+
+      '<button class="btn panic" id="panic">RADERA ALLT</button>'+
+    '</div>'+
+    (!k?'<div class="banner"><div class="txt"><b>Ingen nyckel.</b> Behövs för att skicka krypterat och läsa meddelanden.</div></div>'
+       :old?'<div class="banner"><div class="txt"><b>Nyckeln är '+esc(keyAge(k))+' gammal och bör bytas.</b> Mata in den nya nyckeln.</div></div>':'')+
     '<div class="secthead">Rapporter och order</div>'+
-    TEMPLATES.map(t=>'<button class="tpl" data-act="tpl" data-id="'+t.id+'"><span class="nm'+(t.name.length>6?' long':'')+'">'+esc(t.name)+'</span><span class="fl">'+esc(t.sub||(t.fields.map(f=>f.g||f.l)).join(' · '))+(nDraft(t.id)?' <span class="draft">UTKAST</span>':'')+'</span><span class="chev">'+ICON.chev+'</span></button>').join('')+
+    TEMPLATES.filter(t=>!t.special).map(t=>'<button class="tpl" data-act="tpl" data-id="'+t.id+'"><span class="nm'+(t.name.length>6?' long':'')+'">'+esc(t.name)+'</span><span class="fl">'+esc(t.sub||(t.fields.map(f=>f.g||f.l)).join(' · '))+(nDraft(t.id)?' <span class="draft">UTKAST</span>':'')+'</span><span class="chev">'+ICON.chev+'</span></button>').join('')+
+    '<button class="tpl" data-act="pos"><span class="nm long">MIN POSITION</span><span class="fl">Egen position i MGRS</span><span class="chev">'+ICON.chev+'</span></button>'+
+    '<button class="tpl" data-act="archive"><span class="nm long">ARKIV</span><span class="fl">Skickat och mottaget'+(nArch?' ('+nArch+')':'')+'</span><span class="chev">'+ICON.chev+'</span></button>'+
     '<div class="secthead">Mottaget</div>'+
-    '<button class="btn primary block" data-act="inbox" style="min-height:56px;font-size:17px">Läs mottaget meddelande'+(vault.saved.length?' ('+vault.saved.length+' sparade)':'')+'</button>'+
+    '<button class="btn primary block" data-act="inbox" style="min-height:56px;font-size:17px">Läs mottaget meddelande</button>'+
     '<div style="margin-top:22px"><button class="btn block" data-act="settings">Inställningar</button></div>'+
   '</main>';
+  $('#panic').onclick=panicFlow;
+}
+/* Panikknapp: raderar all data i appen (nyckel, utkast, arkiv, användarinfo, PIN) */
+function panicFlow(){
+  openSheet('<h3 style="color:var(--danger)">RADERA ALLT?</h3><p>All data i appen raderas direkt: nyckel, utkast, arkiv, användarinfo och PIN-kod. Kan inte ångras.</p>'+
+    '<div class="btnrow"><button class="btn panic" id="cok" style="min-height:60px">RADERA</button><button class="btn" id="ccan" style="min-height:60px">Avbryt</button></div>',s=>{
+    $('#cok',s).onclick=wipeEverything; $('#ccan',s).onclick=closeSheet;
+  });
+}
+function wipeEverything(){
+  try{ if(navigator.clipboard) navigator.clipboard.writeText(' ').catch(()=>{}); }catch(e){}
+  try{ if(storageOK) Object.keys(localStorage).filter(k=>k.startsWith('s452.')).forEach(k=>localStorage.removeItem(k)); }catch(e){}
+  Object.keys(mem).forEach(k=>delete mem[k]);
+  document.documentElement.classList.remove('dark');
+  resetApp('All data har raderats.');
 }
 
 /* ================= Template form ================= */
@@ -643,55 +727,88 @@ function renderTemplate(t){
 
 /* ================= Send ================= */
 function smsParts(n){ return n<=160?1:Math.ceil(n/153); }
+function keyWarnHTML(k){ return keyIsOld(k)?'<div class="banner"><div class="txt"><b>Nyckeln är '+esc(keyAge(k))+' gammal</b> och bör bytas.</div></div>':''; }
+/* Export sker alltid via urklipp – ingen delningsmeny */
+function exportSheet(title,html,text,log,t){
+  let logged=false;
+  openSheet('<h3>'+esc(title)+'</h3>'+html+
+    '<div class="stack" style="margin-top:12px">'+
+      '<button class="btn primary block" id="copy" style="min-height:56px;font-size:17px">Kopiera</button>'+
+      '<button class="btn block" id="done">Klar – töm formuläret</button>'+
+      '<button class="btn block" id="cancel">Stäng</button>'+
+    '</div>',s=>{
+      $('#copy',s).onclick=async()=>{ if(await copyText(text)){ if(!logged){ logged=true; log(); } $('#copy',s).textContent='Kopierat ✓ – klistra in i SMS, Slack eller mejl'; } };
+      $('#done',s).onclick=()=>{ vault.drafts[t.id]={}; saveVault(); closeSheet(); go('home'); toast(t.name+' tömt'); };
+      $('#cancel',s).onclick=closeSheet;
+    });
+}
 async function sendFlow(t){
-  const code=todaysCode();
-  if(!code){ confirmSheet('Dygnskod saknas','Ange dagens kod innan du skickar.','Ange kod',()=>go('code')); return; }
+  const k=currentKey();
+  if(!k){ confirmSheet('Nyckel saknas','Mata in en nyckel innan du skickar krypterat.','Mata in nyckel',()=>go('code')); return; }
   const payload=buildPayload(t);
-  const cipher=await encryptMessage(payload,code.c);
+  const cipher=await encryptMessage(payload,k.c);
   const parts=smsParts(cipher.length);
-  const canShare=!!navigator.share;
-  openSheet('<h3>Krypterat '+esc(t.name)+'</h3>'+
+  exportSheet('Krypterat '+t.name,
     '<p class="muted">'+cipher.length+' tecken · ca '+parts+' SMS</p>'+
     (parts>3?'<div class="banner"><div class="txt">Långt för SMS. Slack eller mejl är bättre.</div></div>':'')+
-    '<div class="cipher">'+esc(cipher)+'</div>'+
-    '<div class="stack" style="margin-top:12px">'+
-      (canShare?'<button class="btn primary block" id="share" style="min-height:56px;font-size:17px">Dela (SMS, Slack, mejl…)</button>':'<button class="btn primary block" id="copy">Kopiera</button><p class="muted" style="margin:0">Delning stöds inte i den här webbläsaren.</p>')+
-      '<button class="btn block" id="done">Klar – töm formuläret</button>'+
-      '<button class="btn block" id="cancel">Stäng</button>'+
-    '</div>',s=>{
-      const sh=$('#share',s); if(sh) sh.onclick=async()=>{ try{ await navigator.share({text:cipher}); }catch(e){} };
-      const cp=$('#copy',s); if(cp) cp.onclick=()=>copyText(cipher);
-      $('#done',s).onclick=()=>{ vault.drafts[t.id]={}; saveVault(); closeSheet(); go('home'); toast(t.name+' tömt'); };
-      $('#cancel',s).onclick=closeSheet;
-    });
+    keyWarnHTML(k)+'<div class="cipher">'+esc(cipher)+'</div>',
+    cipher, ()=>archiveAdd({dir:'ut',mode:'krypterat',p:payload}), t);
 }
 function sendPlain(t){
-  const txt=plainMessage(buildPayload(t));
-  const canShare=!!navigator.share;
-  openSheet('<h3>'+esc(t.name)+' i klartext</h3>'+
+  const payload=buildPayload(t), txt=plainMessage(payload);
+  exportSheet(t.name+' i klartext',
     '<div class="banner" style="border-color:var(--danger);background:var(--danger-soft)"><div class="txt"><b>OKRYPTERAT.</b> Kan läsas av alla som ser meddelandet eller telefonen.</div></div>'+
-    '<div class="cipher" style="font-family:var(--font-body);font-size:14px;white-space:pre-wrap;word-break:normal;max-height:200px">'+esc(txt)+'</div>'+
-    '<div class="stack" style="margin-top:12px">'+
-      (canShare?'<button class="btn primary block" id="share" style="min-height:56px;font-size:17px">Dela (SMS, Slack, mejl…)</button>':'<button class="btn primary block" id="copy">Kopiera</button><p class="muted" style="margin:0">Delning stöds inte i den här webbläsaren.</p>')+
-      '<button class="btn block" id="done">Klar – töm formuläret</button>'+
-      '<button class="btn block" id="cancel">Stäng</button>'+
-    '</div>',s=>{
-      const sh=$('#share',s); if(sh) sh.onclick=async()=>{ try{ await navigator.share({text:txt}); }catch(e){} };
-      const cp=$('#copy',s); if(cp) cp.onclick=()=>copyText(txt);
-      $('#done',s).onclick=()=>{ vault.drafts[t.id]={}; saveVault(); closeSheet(); go('home'); toast(t.name+' tömt'); };
-      $('#cancel',s).onclick=closeSheet;
-    });
+    '<div class="cipher" style="font-family:var(--font-body);font-size:14px;white-space:pre-wrap;word-break:normal;max-height:200px">'+esc(txt)+'</div>',
+    txt, ()=>archiveAdd({dir:'ut',mode:'klartext',p:payload}), t);
 }
-async function copyText(txt){
+async function copyText(txt,msg){
   let ok=false;
   try{ await navigator.clipboard.writeText(txt); ok=true; }catch(e){
     const ta=document.createElement('textarea'); ta.value=txt; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
     try{ ok=document.execCommand('copy'); }catch(e2){} ta.remove();
   }
-  if(!ok){ toast('Kunde inte kopiera – markera texten och kopiera manuellt'); return; }
-  toast('Kopierat. Utklippet töms om 60 s.');
+  if(!ok){ toast('Kunde inte kopiera – markera texten och kopiera manuellt'); return false; }
+  toast(msg||'Kopierat. Utklippet töms om 60 s.');
   clearTimeout(copyText._t);
   copyText._t=setTimeout(async()=>{ try{ const cur=await navigator.clipboard.readText().catch(()=>null); if(cur===null||cur===txt) await navigator.clipboard.writeText(' '); }catch(e){} },CLIP_CLEAR_MS);
+  return true;
+}
+
+/* ================= Min position (egen vy, skickas som en mall) ================= */
+function renderPosition(){
+  const t=tplById('POS');
+  const d=vault.drafts.POS={_t:Date.now()};
+  const us=userString();
+  app.innerHTML=headerSmall('Min position')+'<main><div class="panel" id="form">'+
+    '<div id="pstat" class="muted">Hämtar position…</div>'+
+    '<div id="pown" class="mgrsout" style="font-size:26px;margin:6px 0 2px">–</div>'+
+    '<div class="btnrow" style="margin-top:12px"><button class="btn" id="pretry">'+ICON.pin+' Hämta igen</button></div>'+
+    '<div class="field" style="margin-top:16px"><label for="f__ov">Övrigt</label><textarea id="f__ov" data-k="_ov" rows="1" '+TA_ATTR+' placeholder="Förtydligande, t.ex. vad som finns på platsen"></textarea></div>'+
+    '<div class="muted">Sagesman: '+(us?esc(us)+' / tidsnummer':'tidsnummer (fyll i Användarinfo för namn och förband)')+'</div>'+
+  '</div>'+
+  '<div class="sticky-actions"><div class="btnrow" style="flex-wrap:nowrap"><button class="btn primary" id="send" style="flex:2 1 0;min-height:56px;font-size:17px" disabled>Kryptera och skicka</button>'+
+  '<button class="btn" id="sendplain" style="flex:1 1 0;min-height:56px;border-style:dashed;line-height:1.15" disabled>Klartext</button></div></div></main>';
+  const ov=$('#f__ov'); autosize(ov); ov.addEventListener('input',()=>{ d._ov=ov.value; autosize(ov); saveSoon(); });
+  const st=$('#pstat'), own=$('#pown'), sb=$('#send'), pb=$('#sendplain');
+  function get(){
+    if(!navigator.geolocation){ st.textContent='Telefonen ger ingen position i den här webbläsaren.'; return; }
+    st.textContent='Hämtar position…';
+    navigator.geolocation.getCurrentPosition(p=>{
+      if(view.name!=='pos') return;
+      const m=MGRS.fromLatLon(p.coords.latitude,p.coords.longitude);
+      if(!m){ st.textContent='Utanför MGRS-området.'; return; }
+      const acc=Math.round(p.coords.accuracy);
+      d.pos=m+' (±'+acc+' m)'; d._t=Date.now(); saveSoon();
+      st.textContent='Egen position (±'+acc+' m) kl. '+dtg();
+      own.textContent=m; sb.disabled=false; pb.disabled=false;
+    },err=>{
+      st.textContent = err.code===1 ? 'Positionen nekades. Tillåt plats för appen i telefonens inställningar.' : err.code===3 ? 'Ingen GPS-fix ännu. Gå utomhus och försök igen.' : 'Kunde inte hämta position.';
+    },{enableHighAccuracy:true,timeout:30000,maximumAge:0});
+  }
+  $('#pretry').onclick=get;
+  sb.onclick=()=>sendFlow(t);
+  pb.onclick=()=>sendPlain(t);
+  get();
 }
 
 /* ================= Position ================= */
@@ -742,56 +859,87 @@ function positionSheet(onInsert){
   });
 }
 
+/* ================= Arkiv (skickat + mottaget, 24 h) ================= */
+function archiveTitle(a){ if(a.kvitto) return 'KVITTO'; const t=tplById(a.p&&a.p.t); return t?t.name:(a.p&&a.p.t)||'?'; }
+function archiveItem(a,open){
+  const tags=(a.dir==='in'?'<span class="tag in">MOTTAGET</span>':'<span class="tag">SKICKAT</span>')+(a.mode==='klartext'?' <span class="tag warn">KLARTEXT</span>':'')+(a.kept?' <span class="tag kept">SPARAD</span>':'');
+  const sub=dtg(new Date(a.at))+(a.kvitto||!a.p?'':(msgSummary(a.p)?' · '+msgSummary(a.p):''));
+  const body=a.kvitto?'<div class="msg"><div class="v">'+esc(a.text)+'</div></div>':'<div class="msg">'+renderMessage(a.p)+'</div>';
+  return '<div class="listitem"><div class="lrow"><button class="lhead" data-open="'+a.id+'" aria-expanded="'+(open?'true':'false')+'"><span class="lt">'+esc(archiveTitle(a))+'</span><span class="ls">'+tags+'<br>'+esc(sub)+'</span></button>'+
+    '<div class="lbtns"><button class="btn small'+(a.kept?' kept':'')+'" data-keep="'+a.id+'" aria-pressed="'+!!a.kept+'">'+(a.kept?'Sparad ✓':'Spara')+'</button>'+
+    '<button class="btn small danger" data-del="'+a.id+'" aria-label="Radera">Radera</button></div></div>'+
+    '<div class="lbody'+(open?'':' hidden')+'" id="b_'+a.id+'">'+body+
+    (a.dir==='in'&&a.p?'<div class="btnrow" style="margin-top:12px"><button class="btn primary" data-ack="'+a.id+'">Kvittera</button></div>':'')+'</div></div>';
+}
+function bindArchive(rerender){
+  app.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{ const body=$('#b_'+b.dataset.open); const hid=body.classList.toggle('hidden'); b.setAttribute('aria-expanded',!hid); });
+  app.querySelectorAll('[data-ack]').forEach(b=>b.onclick=()=>{ const a=vault.archive.find(x=>x.id===b.dataset.ack); if(a) ackFlow(a.p); });
+  app.querySelectorAll('[data-keep]').forEach(b=>b.onclick=()=>{
+    const a=vault.archive.find(x=>x.id===b.dataset.keep); if(!a) return;
+    a.kept=!a.kept; saveVault();
+    if(!a.kept && Date.now()-a.at>=ARCHIVE_MAX_MS){ pruneArchive(); rerender(); toast('Inte längre sparat – gallrat'); return; }
+    rerender(); toast(a.kept?'Sparat – gallras inte automatiskt':'Inte längre sparat – gallras efter 24 h');
+  });
+  app.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ archiveDel(b.dataset.del); received=received.filter(id=>id!==b.dataset.del); rerender(); toast('Raderat'); });
+}
+function renderArchive(){
+  pruneArchive();
+  const list=vault.archive.slice().sort((a,b)=>b.at-a.at);
+  app.innerHTML=headerSmall('Arkiv')+'<main>'+
+    '<p class="muted" style="color:#E6E9E3;margin:0 2px 10px">Skickade och mottagna meddelanden, senaste överst. Raderas automatiskt efter 24 timmar om du inte trycker Spara.</p>'+
+    (list.length?list.map(a=>archiveItem(a,false)).join(''):'<div class="panel muted">Arkivet är tomt.</div>')+
+  '</main>';
+  bindArchive(renderArchive);
+}
+
 /* ================= Inbox ================= */
 function renderInbox(){
-  const item=(p,i,kind)=>'<div class="listitem"><button class="lhead" data-open="'+kind+i+'" aria-expanded="false"><span class="lt">'+esc(p.t)+'</span><span class="ls">'+esc(msgSummary(p))+'</span>'+(kind==='r'?'<span class="tag">EJ SPARAT</span>':'')+'</button>'+
-    '<div class="lbody hidden" id="b_'+kind+i+'"><div class="msg">'+renderMessage(p)+'</div><div class="btnrow" style="margin-top:12px">'+
-    '<button class="btn primary" data-ack="'+kind+i+'">Kvittera</button>'+(kind==='r'?'<button class="btn" data-save="'+i+'">Spara</button>':'')+'<button class="btn danger" data-del="'+kind+i+'">Radera</button></div></div></div>';
+  received=received.filter(id=>vault.archive.some(a=>a.id===id));
+  const items=received.slice().reverse().map((id,i)=>archiveItem(vault.archive.find(a=>a.id===id),i===0)).join('');
   app.innerHTML=headerSmall('Mottaget')+'<main>'+
     '<div class="panel"><label class="flabel" for="incoming">Klistra in meddelande</label>'+
     '<textarea id="incoming" rows="3" '+TA_ATTR+' placeholder="S452:…"></textarea>'+
     '<div class="btnrow" style="margin-top:10px">'+(navigator.clipboard&&navigator.clipboard.readText?'<button class="btn" id="paste">Klistra in</button>':'')+'<button class="btn primary" id="decrypt">Läs</button></div></div>'+
-    (received.length?'<div class="secthead">Mottagna nu</div><div class="muted" style="color:#E6E9E3;margin:-4px 2px 8px">Töms när appen låses, om du inte sparar dem.</div>'+received.map((p,i)=>item(p,i,'r')).reverse().join(''):'')+
-    (vault.saved.length?'<div class="secthead">Sparade</div>'+vault.saved.map((s,i)=>item(s.p,i,'s')).reverse().join(''):'')+
+    (items?'<div class="secthead">Läst nu</div><div class="muted" style="color:#E6E9E3;margin:-4px 2px 8px">Finns i Arkiv i 24 timmar.</div>'+items:'')+
   '</main>';
   const inc=$('#incoming'); autosize(inc); inc.oninput=()=>autosize(inc);
   const ps=$('#paste'); if(ps) ps.onclick=async()=>{ try{ inc.value=await navigator.clipboard.readText(); autosize(inc); }catch(e){ toast('Klistra in manuellt i rutan'); } };
   $('#decrypt').onclick=async()=>{
     const txt=inc.value.trim(); if(!txt){ toast('Klistra in ett meddelande först'); return; }
-    if(!vault.codes.length){ confirmSheet('Dygnskod saknas','Ange dagens kod för att kunna läsa meddelanden.','Ange kod',()=>go('code')); return; }
-    try{ const p=await decryptMessage(txt,codesNewestFirst()); received.push(p); renderInbox(); const ib=$('#b_r'+(received.length-1)); if(ib){ ib.classList.remove('hidden'); ib.previousElementSibling.setAttribute('aria-expanded','true'); } }
-    catch(e){ toast(e.message==='format'?'Hittar inget Samband 452-meddelande i texten':'Kunde inte läsa. Fel eller saknad dygnskod.',3500); }
+    if(!vault.codes.length){ confirmSheet('Nyckel saknas','Mata in nyckeln för att kunna läsa meddelanden.','Mata in nyckel',()=>go('code')); return; }
+    try{
+      const p=await decryptMessage(txt,codesNewestFirst());
+      const src=(txt.replace(/\s+/g,'').match(/S452:[A-Za-z0-9+/=]+/)||[''])[0];
+      let a=vault.archive.find(x=>x.dir==='in'&&x.src&&x.src===src);
+      if(!a) a=archiveAdd({dir:'in',mode:'krypterat',p,src});
+      received=received.filter(id=>id!==a.id); received.push(a.id);
+      renderInbox();
+    }catch(e){ toast(e.message==='format'?'Hittar inget Samband 452-meddelande i texten':'Kunde inte läsa. Fel nyckel eller nyckel saknas.',3500); }
   };
-  app.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{ const body=$('#b_'+b.dataset.open); const open=body.classList.toggle('hidden'); b.setAttribute('aria-expanded',!open); });
-  app.querySelectorAll('[data-ack]').forEach(b=>b.onclick=()=>{ const k=b.dataset.ack, i=+k.slice(1); ackFlow(k[0]==='r'?received[i]:vault.saved[i].p); });
-  app.querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>{ const i=+b.dataset.save; vault.saved.push({at:Date.now(),p:received[i]}); received.splice(i,1); saveVault(); renderInbox(); toast('Sparat. Påminnelse om radering varje dygn.'); });
-  app.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ const k=b.dataset.del, i=+k.slice(1); if(k[0]==='r') received.splice(i,1); else { vault.saved.splice(i,1); saveVault(); } renderInbox(); });
+  bindArchive(renderInbox);
 }
 
 function receiptText(p){
   const src=(p.f&&(p.f._sm||p.f.sag))||''; const parts=src.split(' / '); const ref=parts[parts.length-1]||'';
   return 'KVITTO '+p.t+(/^\d{6}$/.test(ref)?' '+ref:'')+' – '+withDtg(userString(),dtg());
 }
-function ackFlow(p){
+async function ackFlow(p){
   const txt=receiptText(p);
-  if(navigator.share){ navigator.share({text:txt}).catch(()=>{}); return; }
-  openSheet('<h3>Kvittens</h3><div class="cipher" style="font-family:var(--font-body);font-size:15px">'+esc(txt)+'</div><div class="stack" style="margin-top:12px"><button class="btn primary block" id="copy">Kopiera</button><button class="btn block" id="cancel">Stäng</button></div>',s=>{
-    $('#copy',s).onclick=()=>{ copyText(txt); closeSheet(); }; $('#cancel',s).onclick=closeSheet;
-  });
+  if(await copyText(txt,'Kvittens kopierad – klistra in och skicka.')) archiveAdd({dir:'ut',mode:'klartext',kvitto:true,text:txt});
 }
 
-/* ================= Day code ================= */
+/* ================= Nyckel ================= */
 function renderCode(){
-  const c=todaysCode();
-  app.innerHTML=headerSmall('Dygnskod')+'<main><div class="panel stack">'+
-    '<div>'+(c?'<b>Kod inmatad för '+esc(prettyDay(c.d))+'.</b>':'<b>Ingen kod för idag.</b>')+'</div>'+
-    '<label class="flabel" for="code">'+(c?'Byt dagens kod':'Dagens kod')+'</label>'+
+  const k=currentKey(), old=keyIsOld(k);
+  app.innerHTML=headerSmall('Nyckel')+'<main><div class="panel stack">'+
+    '<div>'+(k?'<b>Nyckel inmatad '+esc(dtg(new Date(k.t)))+'</b> ('+esc(keyAge(k))+' sedan).'+(old?'<br><span style="color:var(--warn);font-weight:700">Äldre än 24 timmar – bör bytas.</span>':''):'<b>Ingen nyckel inmatad.</b>')+'</div>'+
+    '<label class="flabel" for="code">'+(k?'Ny nyckel':'Nyckel')+'</label>'+
     '<div class="inrow"><input type="password" id="code" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="off"><button class="btn" id="show" type="button">Visa</button></div>'+
     '<button class="btn primary block" id="savecode">Spara</button>'+
-    '<p class="muted" style="margin:0">Koden gäller till midnatt. Gårdagens kod sparas till kl. 06 så att meddelanden skickade före midnatt går att läsa, sedan raderas den. Distribuera aldrig koden i samma kanal som meddelandena.</p>'+
+    '<p class="muted" style="margin:0">Nyckeln ligger kvar tills du matar in en ny. Byt nyckel varje dygn – appen varnar när den är äldre än 24 timmar. Föregående nyckel sparas i 24 timmar efter bytet så att meddelanden som krypterats med den fortfarande går att läsa. Distribuera aldrig nyckeln i samma kanal som meddelandena.</p>'+
   '</div></main>';
   $('#show').onclick=()=>{ const i=$('#code'); i.type=i.type==='password'?'text':'password'; $('#show').textContent=i.type==='password'?'Visa':'Dölj'; };
-  $('#savecode').onclick=()=>{ const v=$('#code').value.trim(); if(!v){ toast('Skriv in koden'); return; } vault.codes.push({d:dayKey(),c:v,t:Date.now()}); vault.codes=vault.codes.slice(-4); saveVault(); toast('Dygnskoden sparad'); go('home'); };
+  $('#savecode').onclick=()=>{ const v=$('#code').value.trim(); if(!v){ toast('Skriv in nyckeln'); return; } vault.codes.push({c:v,t:Date.now()}); vault.codes=vault.codes.slice(-4); pruneCodes(); saveVault(); toast('Nyckeln sparad'); go('home'); };
 }
 
 /* ================= User info ================= */
@@ -815,22 +963,22 @@ function renderSettings(){
   app.innerHTML=headerSmall('Inställningar')+'<main>'+
     '<div class="panel stack">'+
       '<button class="btn block" data-act="user">Användarinfo</button>'+
-      '<button class="btn block" data-act="code">Dygnskod</button>'+
+      '<button class="btn block" data-act="code">Nyckel</button>'+
       '<div class="toggle"><span><b>Mörkt läge</b><br><span class="muted">För fält och mörker</span></span><button class="switch'+(isDark()?' on':'')+'" id="dark" role="switch" aria-checked="'+isDark()+'" aria-label="Mörkt läge"></button></div>'+
       '<button class="btn block" id="chpin">Byt PIN-kod</button>'+
     '</div>'+
     '<div class="panel stack">'+
-      '<button class="btn danger block" id="wipe">Rensa allt</button>'+
-      '<p class="muted" style="margin:0">Raderar dygnskoder, utkast och alla mottagna och sparade meddelanden. Användarinfo och PIN-kod behålls.</p>'+
+      '<button class="btn danger block" id="wipe">Rensa nyckel, utkast och arkiv</button>'+
+      '<p class="muted" style="margin:0">Användarinfo och PIN-kod behålls.</p>'+
       '<button class="btn danger block" id="reset" style="margin-top:6px">Nollställ appen</button>'+
-      '<p class="muted" style="margin:0">Raderar allt, även PIN-kod och användarinfo.</p>'+
+      '<p class="muted" style="margin:0">Raderar allt, även PIN-kod och användarinfo (samma som RADERA ALLT).</p>'+
     '</div>'+
     '<p style="color:#E6E9E3;font-size:13px;text-align:center;margin-top:18px">Samband 452 · version '+esc(VERSION)+'<br>Skydd för övnings- och ej klassificerad information.</p>'+
   '</main>';
   $('#dark').onclick=()=>{ const on=!isDark(); document.documentElement.classList.toggle('dark',on); store.set('s452.theme',on?'dark':'light'); renderSettings(); };
   $('#chpin').onclick=()=>{ pinMode='change1'; pinBuf=''; renderLock(); };
-  $('#wipe').onclick=()=>confirmSheet('Rensa allt?','Dygnskoder, utkast och alla mottagna och sparade meddelanden raderas.','Rensa',()=>{ vault.codes=[]; vault.drafts={}; vault.saved=[]; received=[]; saveVault(); go('home'); toast('Allt rensat'); });
-  $('#reset').onclick=()=>confirmSheet('Nollställ appen?','Allt raderas, även PIN-kod och användarinfo.','Nollställ',()=>resetApp());
+  $('#wipe').onclick=()=>confirmSheet('Rensa nyckel, utkast och arkiv?','Nyckel, utkast och alla skickade och mottagna meddelanden raderas.','Rensa',()=>{ vault.codes=[]; vault.drafts={}; vault.saved=[]; vault.archive=[]; received=[]; saveVault(); go('home'); toast('Rensat'); });
+  $('#reset').onclick=()=>panicFlow();
 }
 
 /* ================= Sheet helpers ================= */
